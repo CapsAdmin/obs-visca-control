@@ -1,6 +1,9 @@
 --ANALYZE
 local bit = require("bit")
-local socket = require("ljsocket")
+local socket = import("./ljsocket.nlua")
+local type { TSocket, AddressInfo } = import<|"./ljsocket.nlua"|>
+
+import<|"./obslua.nlua"|>
 local obs = obslua
 
 --- Visca module
@@ -242,7 +245,12 @@ local type PayloadBytes = {[1 .. 2] = number, [3 .. 24] = nil | number}
 --- @class PayloadCommand object
 Visca.PayloadCommand = {}
 Visca.PayloadCommand.__index = Visca.PayloadCommand
-
+type Visca.PayloadCommand.@Self = {
+    command_inquiry = number,
+    category = number,
+    command = number,
+    arguments = List<|number|>,
+}
 function Visca.PayloadCommand.new()
     local self = {
         command_inquiry = 0x00,
@@ -430,7 +438,7 @@ type Visca.Message.@Self = {
     payload_size = number,
     seq_nr = number,
     payload = PayloadBytes, -- as Payload structure
-    message = {command = nil | Visca.PayloadCommand.new(), reply = nil | Visca.PayloadReply.new()},
+    message = {command = nil | Visca.PayloadCommand.@Self, reply = nil | Visca.PayloadReply.@Self},
 }
 
 --- Visca Message Constructor
@@ -675,7 +683,7 @@ end
 function Visca.ReplyServer.receive()
     for _,server in pairs(Visca.ReplyServer.servers) do
         local data, reply_source = server:receive_from()
-        if data ~= nil then
+        if data ~= nil and type(reply_source) == "table" then
             local address = reply_source:get_ip()
             if Visca.ReplyServer.whitelist[address] ~= nil then
                 table.insert(Visca.ReplyServer.replies, {address, data})
@@ -701,13 +709,13 @@ end
 Visca.Transmission = {}
 Visca.Transmission.__index = Visca.Transmission
 type Visca.Transmission.@Self = {
-    send = Visca.Message.new(),
+    send = Visca.Message.@Self,
     send_timestamp = nil | number,
-    ack = nil | Visca.PayloadReply.new(),
+    ack = nil | Visca.PayloadReply.@Self,
     ack_timestamp = nil | number,
-    error = nil | Visca.PayloadReply.new(),
+    error = nil | Visca.PayloadReply.@Self,
     error_timestamp = nil | number,
-    completion = nil | Visca.PayloadReply.new(),
+    completion = nil | Visca.PayloadReply.@Self,
     completion_timestamp = nil | number,
 }
 
@@ -716,7 +724,7 @@ type Visca.Transmission.@Self = {
 ---
 --- @param message Message The original sent message
 --- @return Transmission
-function Visca.Transmission.new(message: mutable Visca.Message.new())
+function Visca.Transmission.new(message: mutable Visca.Message.@Self)
     local transmission = {
       send                 = message,
       send_timestamp       = nil,
@@ -727,13 +735,13 @@ function Visca.Transmission.new(message: mutable Visca.Message.new())
       completion           = nil,  -- received completion message
       completion_timestamp = nil,  -- received completion timestamp
     }
-    setmetatable(transmission, Visca.Transmission)
+    setmetatable(transmission as Visca.Transmission.@Self --[[bug in nattlua]], Visca.Transmission)
 
     return transmission
 end
 
-function Visca.Transmission:add_reply(reply: Visca.PayloadReply.new())
-    if reply.is_ack() then
+function Visca.Transmission:add_reply(reply: Visca.PayloadReply.@Self)
+    if reply:is_ack() then
         self.ack = reply
         self.ack_timestamp = obs.os_gettime_ns()
     elseif reply:is_completion() then
@@ -775,13 +783,13 @@ end
 Visca.Connection = {}
 Visca.Connection.__index = Visca.Connection
 type Visca.Connection.@Self = {
-    sock = TSocket,
+    sock = TSocket | nil,
     last_seq_nr = number,
-    address = AddressInfo,
-    sock_address = any,
-    sock_err = any,
+    address = string,
+    sock_address = AddressInfo | nil,
+    sock_err = string | nil,
     mode = Visca.modes[keysof<|Visca.modes|>],
-    transmission_queue = List<|Visca.Transmission<|Visca.Message.new<|string, number|>|>|>,
+    transmission_queue = List<|Visca.Transmission.@Self|>,
     callbacks = any,
 }
 
@@ -795,7 +803,7 @@ function Visca.Connection.new(address: string, port: nil | number)
     if (port < 1) or (port > 65535) then
         port = Visca.default_port
     end
-    local sock_addr, sock_err = socket.find_first_address(address, port)
+    local sock_addr, sock_err = socket.find_first_address(address, tostring(port))
     local connection = {
         sock               = nil,
         last_seq_nr        = 0xFFFFFFFF,
@@ -883,7 +891,7 @@ function Visca.Connection:unregister_on_timeout_callback(id: string)
 end
 
 --- @param message Message
-function Visca.Connection:__transmit(message: Visca.Message.new())
+function Visca.Connection:__transmit(message: Visca.Message.@Self)
     local data_to_send = message:to_data(self.mode)
     local sock = self.sock
 
@@ -892,14 +900,14 @@ function Visca.Connection:__transmit(message: Visca.Message.new())
         message:dump(nil, nil, self.mode)
     end
 
-    if sock ~= nil then
+    if sock ~= nil and self.sock_address ~= nil then
         return sock:send_to(self.sock_address, data_to_send), data_to_send
     else
         return 0, data_to_send
     end
 end
 
-function Visca.Connection:__transmissions_add_message(msg: Visca.Message.new())
+function Visca.Connection:__transmissions_add_message(msg: Visca.Message.@Self)
     local found = false
     local transmission
 
@@ -914,7 +922,7 @@ function Visca.Connection:__transmissions_add_message(msg: Visca.Message.new())
             found = true
         end
 
-        if found then
+        if found and msg.message.reply then
             t:add_reply(msg.message.reply)
             transmission = t
             break
@@ -978,7 +986,7 @@ function Visca.Connection:close()
 end
 
 --- @param message Message
-function Visca.Connection:send(message: string)
+function Visca.Connection:send(message: Visca.Message.@Self)
     if self.last_seq_nr < 0xFFFFFFFF then
         self.last_seq_nr = self.last_seq_nr + 1
     else
@@ -1010,7 +1018,7 @@ function Visca.Connection:receive()
 
             if msg.message.reply then
                 local transmission = self:__transmissions_add_message(msg)
-                if transmission then
+                if transmission and msg.message.reply then
                     if msg.message.reply:is_ack() then
                         self:__exec_callback('ack', transmission)
                     elseif msg.message.reply:is_completion() then
