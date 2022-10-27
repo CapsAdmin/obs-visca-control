@@ -1,3 +1,4 @@
+--ANALYZE
 local bit = require("bit")
 local socket = require("ljsocket")
 local obs = obslua
@@ -148,7 +149,7 @@ Visca.inquiry_command_names = {
     [Visca.inquiry_commands.zoom_position]    = "Zoom (Position)",
 }
 
-local function ca_key(command, argument)
+local function ca_key(command: ref (nil | number), argument: ref (nil | number))
     return bit.lshift(command or 0, 8) + (argument or 0)
 end
 
@@ -236,6 +237,8 @@ Visca.CameraModel = {
 }
 setmetatable(Visca.CameraModel, Visca.CameraModelMeta)
 
+local type PayloadBytes = {[1 .. 2] = number, [3 .. 24] = nil | number}
+
 --- @class PayloadCommand object
 Visca.PayloadCommand = {}
 Visca.PayloadCommand.__index = Visca.PayloadCommand
@@ -251,7 +254,7 @@ function Visca.PayloadCommand.new()
     return self
 end
 
-function Visca.PayloadCommand:from_payload(payload)
+function Visca.PayloadCommand:from_payload(payload: PayloadBytes)
     self.command_inquiry = payload[2]
     self.category        = payload[3] or 0
     self.command         = payload[4] or 0
@@ -309,6 +312,13 @@ end
 Visca.PayloadReply = {}
 Visca.PayloadReply.__index = Visca.PayloadReply
 
+type Visca.PayloadReply.@Self = {
+    reply_type = number,
+    socket_number = number,
+    error_type = number,
+    arguments = List<|number|>,
+}
+
 function Visca.PayloadReply.new()
     local self = {
         reply_type    = 0x00,
@@ -320,7 +330,7 @@ function Visca.PayloadReply.new()
     return self
 end
 
-function Visca.PayloadReply:from_payload(payload)
+function Visca.PayloadReply:from_payload(payload: PayloadBytes)
     self.reply_type    = bit.band(payload[2], 0xF0)
     self.socket_number = bit.band(payload[2], 0x0F)
 
@@ -349,7 +359,7 @@ function Visca.PayloadReply:is_error()
     return self.reply_type == Visca.packet_consts.reply_error
 end
 
-function Visca.PayloadReply:get_inquiry_data_for(inquiry_payload)
+function Visca.PayloadReply:get_inquiry_data_for(inquiry_payload: PayloadBytes)
     local _,_,category,inquiry_command = unpack(inquiry_payload)
     local data = {}
 
@@ -415,6 +425,13 @@ end
 --- @class Message Visca Message object
 Visca.Message = {}
 Visca.Message.__index = Visca.Message
+type Visca.Message.@Self = {
+    payload_type = number,
+    payload_size = number,
+    seq_nr = number,
+    payload = PayloadBytes, -- as Payload structure
+    message = {command = nil | Visca.PayloadCommand.new(), reply = nil | Visca.PayloadReply.new()},
+}
 
 --- Visca Message Constructor
 ---
@@ -435,14 +452,14 @@ function Visca.Message.new()
         payload_type = 0x0000,
         payload_size = 0x0000,
         seq_nr       = 0x00000000,
-        payload      = {},
+        payload      = {0,0},
         message      = {},
     }
     setmetatable(msg, Visca.Message)
     return msg
 end
 
-function Visca.Message:from_data(data)
+function Visca.Message:from_data(data: string)
     local message_length = #(data or '')
     if message_length > 1 then
         if (string.byte(data, 1) == 0x01 or
@@ -456,7 +473,7 @@ function Visca.Message:from_data(data)
 
             for b = 1, self.payload_size do
                 if 8+b <= message_length then
-                    table.insert(self.payload, string.byte(data, 8 + b))
+                    table.insert(self.payload, string.byte(data, 8 + b) or 0)
                 else
                     if self.payload_size > #self.payload then
                         self.payload_size = #self.payload
@@ -468,7 +485,7 @@ function Visca.Message:from_data(data)
         elseif message_length >= 1 and message_length <= 16 then
             self.payload_size = message_length
             for b = 1, message_length do
-                table.insert(self.payload, string.byte(data, b))
+                table.insert(self.payload, string.byte(data, b) or 0)
             end
         end
 
@@ -484,7 +501,7 @@ function Visca.Message:from_data(data)
     return self
 end
 
-function Visca.Message:to_data(mode)
+function Visca.Message:to_data(mode: nil | Visca.modes[keysof<|Visca.modes|>])
     mode = mode or Visca.modes.generic
     local payload_size = (self.payload_size > 0) and self.payload_size or #self.payload
     local data = {}
@@ -515,7 +532,7 @@ function Visca.Message:to_data(mode)
 end
 
 --- @param mode ViscaModes
-function Visca.Message:as_string(mode)
+function Visca.Message:as_string(mode: nil | Visca.modes[keysof<|Visca.modes|>])
     mode = mode or Visca.modes.generic
     local bin_str = self:to_data(mode)
     local bin_len = #(bin_str or "")
@@ -528,7 +545,7 @@ function Visca.Message:as_string(mode)
     return table.concat(str_a, ' ')
 end
 
-function Visca.Message:dump(name, prefix, mode)
+function Visca.Message:dump(name: nil | string, prefix: nil | string, mode: nil | Visca.modes[keysof<|Visca.modes|>])
     if name then
       print('\n' .. name .. ':')
     end
@@ -584,7 +601,7 @@ Visca.ReplyServer = {
     replies = {},
 }
 
-function Visca.ReplyServer.add_listener_for(address, port)
+function Visca.ReplyServer.add_listener_for(address: nil | string, port: number)
     local cnt = (Visca.ReplyServer.clients[port] or 0)
     if cnt == 0 then
         local sock_address, err, num = socket.find_first_address("*", port,
@@ -629,7 +646,7 @@ function Visca.ReplyServer.add_listener_for(address, port)
     Visca.ReplyServer.clients[port] = cnt
 end
 
-function Visca.ReplyServer.remove_listener_for(port)
+function Visca.ReplyServer.remove_listener_for(port: string)
     local cnt = (Visca.ReplyServer.clients[port] or 0) - 1
 
     if cnt <= 0 then
@@ -667,7 +684,7 @@ function Visca.ReplyServer.receive()
     end
 end
 
-function Visca.ReplyServer.get_data_for(address)
+function Visca.ReplyServer.get_data_for(address: string)
     for k,v in pairs(Visca.ReplyServer.replies) do
         if v ~= nil then
             local reply_source, data = unpack(v)
@@ -683,12 +700,23 @@ end
 --- It stores the response by type (ack, error or completion) and tracks timeout.
 Visca.Transmission = {}
 Visca.Transmission.__index = Visca.Transmission
+type Visca.Transmission.@Self = {
+    send = Visca.Message.new(),
+    send_timestamp = nil | number,
+    ack = nil | Visca.PayloadReply.new(),
+    ack_timestamp = nil | number,
+    error = nil | Visca.PayloadReply.new(),
+    error_timestamp = nil | number,
+    completion = nil | Visca.PayloadReply.new(),
+    completion_timestamp = nil | number,
+}
+
 
 --- Visca Transaction Constructor
 ---
 --- @param message Message The original sent message
 --- @return Transmission
-function Visca.Transmission.new(message)
+function Visca.Transmission.new(message: mutable Visca.Message.new())
     local transmission = {
       send                 = message,
       send_timestamp       = nil,
@@ -704,8 +732,8 @@ function Visca.Transmission.new(message)
     return transmission
 end
 
-function Visca.Transmission:add_reply(reply)
-    if reply:is_ack() then
+function Visca.Transmission:add_reply(reply: Visca.PayloadReply.new())
+    if reply.is_ack() then
         self.ack = reply
         self.ack_timestamp = obs.os_gettime_ns()
     elseif reply:is_completion() then
@@ -746,13 +774,23 @@ end
 --- @class Connection Connection to a Visca camera
 Visca.Connection = {}
 Visca.Connection.__index = Visca.Connection
+type Visca.Connection.@Self = {
+    sock = TSocket,
+    last_seq_nr = number,
+    address = AddressInfo,
+    sock_address = any,
+    sock_err = any,
+    mode = Visca.modes[keysof<|Visca.modes|>],
+    transmission_queue = List<|Visca.Transmission<|Visca.Message.new<|string, number|>|>|>,
+    callbacks = any,
+}
 
 --- Visca Connection constructor
 ---
 --- @param address string The IP address or DNS of the camera
 --- @param port number    The Visca control port of the camera
 --- @return Connection
-function Visca.Connection.new(address, port)
+function Visca.Connection.new(address: string, port: nil | number)
     port = port or Visca.default_port
     if (port < 1) or (port > 65535) then
         port = Visca.default_port
@@ -783,7 +821,7 @@ function Visca.Connection.new(address, port)
 end
 
 --- @param mode ViscaModes
-function Visca.Connection:set_mode(mode)
+function Visca.Connection:set_mode(mode: Visca.modes[keysof<|Visca.modes|>])
     if Visca.modes:has_value(mode or Visca.modes.generic) then
         self.mode = mode
         return true
@@ -792,24 +830,24 @@ function Visca.Connection:set_mode(mode)
     end
 end
 
-function Visca.Connection:__register_callback(callback_type, id, callback)
+function Visca.Connection:__register_callback(callback_type: string, id: string, callback: Function)
     if type(self.callbacks[callback_type]) ~= 'table' then
         self.callbacks[callback_type] = {}
     end
     self.callbacks[callback_type][id] = callback
 end
 
-function Visca.Connection:__unregister_callback(callback_type, id)
+function Visca.Connection:__unregister_callback(callback_type: string, id: string)
     if self.callbacks[callback_type] ~= nil then
         self.callbacks[callback_type][id] = nil
     end
 end
 
-function Visca.Connection:__exec_callback(callback_type, t, ...)
+function Visca.Connection:__exec_callback(callback_type: string, t: any, ...)
     if self.callbacks[callback_type] ~= nil then
         for id,callback in pairs(self.callbacks[callback_type]) do
             if type(callback) == 'function' then
-                local status,result_or_error = pcall(callback, t, unpack(arg or {}))
+                local status,result_or_error = pcall(callback, t, ...)
                 if not status then
                     print(string.format("Callback %s for %s failed: %s", id, callback_type, result_or_error))
                 end
@@ -818,34 +856,34 @@ function Visca.Connection:__exec_callback(callback_type, t, ...)
     end
 end
 
-function Visca.Connection:register_on_ack_callback(id, callback)
+function Visca.Connection:register_on_ack_callback(id: string, callback: Function)
     self:__register_callback('ack', id, callback)
 end
-function Visca.Connection:register_on_completion_callback(id, callback)
+function Visca.Connection:register_on_completion_callback(id: string, callback: Function)
     self:__register_callback('completion', id, callback)
 end
-function Visca.Connection:register_on_error_callback(id, callback)
+function Visca.Connection:register_on_error_callback(id: string, callback: Function)
     self:__register_callback('error', id, callback)
 end
-function Visca.Connection:register_on_timeout_callback(id, callback)
+function Visca.Connection:register_on_timeout_callback(id: string, callback: Function)
     self:__register_callback('timeout', id, callback)
 end
 
-function Visca.Connection:unregister_on_ack_callback(id)
+function Visca.Connection:unregister_on_ack_callback(id: string)
     self:__unregister_callback('ack', id)
 end
-function Visca.Connection:unregister_on_completion_callback(id)
+function Visca.Connection:unregister_on_completion_callback(id: string)
     self:__unregister_callback('completion', id)
 end
-function Visca.Connection:unregister_on_error_callback(id)
+function Visca.Connection:unregister_on_error_callback(id: string)
     self:__unregister_callback('error', id)
 end
-function Visca.Connection:unregister_on_timeout_callback(id)
+function Visca.Connection:unregister_on_timeout_callback(id: string)
     self:__unregister_callback('timeout', id)
 end
 
 --- @param message Message
-function Visca.Connection:__transmit(message)
+function Visca.Connection:__transmit(message: Visca.Message.new())
     local data_to_send = message:to_data(self.mode)
     local sock = self.sock
 
@@ -861,7 +899,7 @@ function Visca.Connection:__transmit(message)
     end
 end
 
-function Visca.Connection:__transmissions_add_message(msg)
+function Visca.Connection:__transmissions_add_message(msg: Visca.Message.new())
     local found = false
     local transmission
 
@@ -940,7 +978,7 @@ function Visca.Connection:close()
 end
 
 --- @param message Message
-function Visca.Connection:send(message)
+function Visca.Connection:send(message: string)
     if self.last_seq_nr < 0xFFFFFFFF then
         self.last_seq_nr = self.last_seq_nr + 1
     else
@@ -998,8 +1036,8 @@ function Visca.Connection:receive()
     return unpack(result)
 end
 
-function Visca.Connection:Cam_Focus_Mode(mode)
-    if Visca.Focus_modes:has_value(mode) then
+function Visca.Connection:Cam_Focus_Mode(mode: Visca.Focus_modes[string])
+    if Visca.Focus_modes:has_value(mode) and mode then
         local msg = Visca.Message.new()
         msg.payload_type = Visca.payload_types.visca_command
         msg.payload = {
@@ -1035,7 +1073,7 @@ function Visca.Connection:Cam_Focus_Stop()
     return self:send(msg)
 end
 
-function Visca.Connection:Cam_Focus_Far(speed)
+function Visca.Connection:Cam_Focus_Far(speed: nil | (Visca.limits.FOCUS_MIN_SPEED .. Visca.limits.FOCUS_MAX_SPEED))
     if speed then
         speed = math.min(math.max(speed or 0x02, Visca.limits.FOCUS_MIN_SPEED), Visca.limits.FOCUS_MAX_SPEED)
     end
@@ -1055,7 +1093,7 @@ function Visca.Connection:Cam_Focus_Far(speed)
     return self:send(msg)
 end
 
-function Visca.Connection:Cam_Focus_Near(speed)
+function Visca.Connection:Cam_Focus_Near(speed: nil | (Visca.limits.FOCUS_MIN_SPEED .. Visca.limits.FOCUS_MAX_SPEED))
     if speed then
         speed = math.min(math.max(speed or 0x02, Visca.limits.FOCUS_MIN_SPEED), Visca.limits.FOCUS_MAX_SPEED)
     end
@@ -1075,7 +1113,7 @@ function Visca.Connection:Cam_Focus_Near(speed)
     return self:send(msg)
 end
 
-function Visca.Connection:Cam_Power(on)
+function Visca.Connection:Cam_Power(on: boolean)
     local msg = Visca.Message.new()
     msg.payload_type = Visca.payload_types.visca_command
     msg.payload = {
@@ -1090,7 +1128,7 @@ function Visca.Connection:Cam_Power(on)
     return self:send(msg)
 end
 
-function Visca.Connection:Cam_Preset_Recall(preset)
+function Visca.Connection:Cam_Preset_Recall(preset: 0 .. 127)
     local msg = Visca.Message.new()
     msg.payload_type = Visca.payload_types.visca_command
     msg.payload = {
@@ -1106,7 +1144,7 @@ function Visca.Connection:Cam_Preset_Recall(preset)
     return self:send(msg)
 end
 
-function Visca.Connection:Cam_PanTilt(direction, pan_speed, tilt_speed)
+function Visca.Connection:Cam_PanTilt(direction:  Visca.PanTilt_directions[keysof<|Visca.PanTilt_directions|>], pan_speed: nil | (Visca.limits.PAN_MIN_SPEED .. Visca.limits.PAN_MAX_SPEED), tilt_speed: nil | (Visca.limits.TILT_MIN_SPEED .. Visca.limits.TILT_MAX_SPEED))
     if Visca.PanTilt_directions:has_value(direction or Visca.PanTilt_directions.stop) then
         pan_speed = math.min(math.max(pan_speed or 1, Visca.limits.PAN_MIN_SPEED), Visca.limits.PAN_MAX_SPEED)
         tilt_speed = math.min(math.max(tilt_speed or 1, Visca.limits.TILT_MIN_SPEED), Visca.limits.TILT_MAX_SPEED)
@@ -1134,7 +1172,7 @@ function Visca.Connection:Cam_PanTilt(direction, pan_speed, tilt_speed)
     end
 end
 
-function Visca.Connection:Cam_PanTilt_Absolute(speed, pan, tilt)
+function Visca.Connection:Cam_PanTilt_Absolute(speed: nil | (Visca.limits.PAN_MIN_SPEED .. Visca.limits.PAN_MAX_SPEED), pan: nil | (Visca.limits.PAN_MIN_VALUE .. Visca.limits.PAN_MAX_VALUE), tilt: nil | (Visca.limits.TILT_MIN_SPEED .. Visca.limits.TILT_MAX_SPEED))
     speed = math.min(math.max(speed or 1, Visca.limits.PAN_MIN_SPEED), Visca.limits.PAN_MAX_SPEED)
     pan = math.min(math.max(pan or 1, Visca.limits.PAN_MIN_VALUE), Visca.limits.PAN_MAX_VALUE)
     tilt = math.min(math.max(tilt or 1, Visca.limits.TILT_MIN_VALUE), Visca.limits.TILT_MAX_VALUE)
@@ -1219,7 +1257,7 @@ function Visca.Connection:Cam_Zoom_Stop()
     return self:send(msg)
 end
 
-function Visca.Connection:Cam_Zoom_Tele(speed)
+function Visca.Connection:Cam_Zoom_Tele(speed: nil | (Visca.limits.ZOOM_MIN_SPEED .. Visca.limits.ZOOM_MAX_SPEED))
     if speed then
         speed = math.min(math.max(speed or 0x02, Visca.limits.ZOOM_MIN_SPEED), Visca.limits.ZOOM_MAX_SPEED)
     end
@@ -1239,7 +1277,7 @@ function Visca.Connection:Cam_Zoom_Tele(speed)
     return self:send(msg)
 end
 
-function Visca.Connection:Cam_Zoom_Wide(speed)
+function Visca.Connection:Cam_Zoom_Wide(speed: nil | (Visca.limits.ZOOM_MIN_SPEED .. Visca.limits.ZOOM_MAX_SPEED))
     if speed then
         speed = math.min(math.max(speed or 0x02, Visca.limits.ZOOM_MIN_SPEED), Visca.limits.ZOOM_MAX_SPEED)
     end
@@ -1259,7 +1297,7 @@ function Visca.Connection:Cam_Zoom_Wide(speed)
     return self:send(msg)
 end
 
-function Visca.Connection:Cam_Zoom_To(zoom)
+function Visca.Connection:Cam_Zoom_To(zoom: nil | (Visca.limits.ZOOM_MIN_VALUE .. Visca.limits.ZOOM_MAX_VALUE))
     zoom = math.min(math.max(zoom or 0, Visca.limits.ZOOM_MIN_VALUE), Visca.limits.ZOOM_MAX_VALUE)
 
     local msg = Visca.Message.new()
@@ -1307,7 +1345,7 @@ function Visca.Connection:Cam_Software_Version_Inquiry()
     return self:send(msg)
 end
 
-function Visca.connect(address, port)
+function Visca.connect(address: string, port: number)
     local connection = Visca.Connection.new(address, port)
     if connection.sock then
         return connection
