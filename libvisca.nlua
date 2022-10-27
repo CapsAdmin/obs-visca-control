@@ -838,14 +838,14 @@ function Visca.Connection:set_mode(mode: Visca.modes[keysof<|Visca.modes|>])
     end
 end
 
-function Visca.Connection:__register_callback(callback_type: string, id: string, callback: Function)
+function Visca.Connection:__register_callback(callback_type: string, id: number, callback: Function)
     if type(self.callbacks[callback_type]) ~= 'table' then
         self.callbacks[callback_type] = {}
     end
     self.callbacks[callback_type][id] = callback
 end
 
-function Visca.Connection:__unregister_callback(callback_type: string, id: string)
+function Visca.Connection:__unregister_callback(callback_type: string, id: number)
     if self.callbacks[callback_type] ~= nil then
         self.callbacks[callback_type][id] = nil
     end
@@ -863,30 +863,30 @@ function Visca.Connection:__exec_callback(callback_type: string, t: any, ...)
         end
     end
 end
-
-function Visca.Connection:register_on_ack_callback(id: string, callback: Function)
+local type TransmissionCallback = function=(Visca.Transmission.@Self)>()
+function Visca.Connection:register_on_ack_callback(id: number, callback: TransmissionCallback)
     self:__register_callback('ack', id, callback)
 end
-function Visca.Connection:register_on_completion_callback(id: string, callback: Function)
+function Visca.Connection:register_on_completion_callback(id: number, callback: TransmissionCallback)
     self:__register_callback('completion', id, callback)
 end
-function Visca.Connection:register_on_error_callback(id: string, callback: Function)
+function Visca.Connection:register_on_error_callback(id: number, callback: TransmissionCallback)
     self:__register_callback('error', id, callback)
 end
-function Visca.Connection:register_on_timeout_callback(id: string, callback: Function)
+function Visca.Connection:register_on_timeout_callback(id: number, callback: TransmissionCallback)
     self:__register_callback('timeout', id, callback)
 end
 
-function Visca.Connection:unregister_on_ack_callback(id: string)
+function Visca.Connection:unregister_on_ack_callback(id: number)
     self:__unregister_callback('ack', id)
 end
-function Visca.Connection:unregister_on_completion_callback(id: string)
+function Visca.Connection:unregister_on_completion_callback(id: number)
     self:__unregister_callback('completion', id)
 end
-function Visca.Connection:unregister_on_error_callback(id: string)
+function Visca.Connection:unregister_on_error_callback(id: number)
     self:__unregister_callback('error', id)
 end
-function Visca.Connection:unregister_on_timeout_callback(id: string)
+function Visca.Connection:unregister_on_timeout_callback(id: number)
     self:__unregister_callback('timeout', id)
 end
 
